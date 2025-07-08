@@ -2,8 +2,8 @@
 
 1. **Clone repository:**
    ```sh
-   git clone https://github.com/USERNAME/alfamart-dashboard.git
-   cd alfamart-dashboard
+   git clone https://github.com/USERNAME/Customer-data-platform.git
+   cd Customer-data-platform
    ```
 2. **Buat virtual environment & aktifkan:**
    ```sh
