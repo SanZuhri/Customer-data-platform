@@ -5,6 +5,8 @@ from sqlalchemy.orm import sessionmaker
 from streamlit_condition_tree import condition_tree, config_from_dataframe, JsCode
 import re
 from datetime import datetime
+import math
+
 
 # Asumsikan file-file ini sudah ada
 from database import engine
@@ -23,13 +25,23 @@ st.set_page_config(
 # --- CSS Kustom untuk Tampilan (Opsional, tapi mempercantik) ---
 st.markdown("""
 <style>
-    /* Mengurangi padding atas dari halaman */
     .block-container {
         padding-top: 2rem;
+        padding-bottom: 2rem;
     }
-    /* Mengatur gaya tombol utama */
     .stButton>button {
         font-weight: bold;
+    }
+    /* Gaya untuk header tabel kustom */
+    .table-header {
+        font-weight: bold;
+        font-size: 1.1em;
+    }
+    /* Gaya untuk navigasi halaman */
+    .page-nav {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -65,11 +77,15 @@ def save_or_update_filter(name: str, tree_dict: dict, old_name: str = None):
     finally:
         session.close()
 
-def load_all_filters():
+def load_all_filters(search_term: str = ""):
+    """Mengambil semua filter, dengan opsi pencarian pada nama segmen."""
     session = Session()
     try:
-        # Ambil semua data yang dibutuhkan untuk direktori
-        return session.query(FilterTersimpan).order_by(FilterTersimpan.dibuat_pada.desc()).all()
+        query = session.query(FilterTersimpan)
+        if search_term:
+            # Menggunakan ILIKE untuk pencarian case-insensitive
+            query = query.filter(FilterTersimpan.nama_filter.ilike(f"%{search_term}%"))
+        return query.order_by(FilterTersimpan.dibuat_pada.desc()).all()
     finally:
         session.close()
 
@@ -160,16 +176,24 @@ if 'filter_version' not in st.session_state:
     st.session_state.filter_version = 0
 if 'active_tree_config' not in st.session_state:
     st.session_state.active_tree_config = None
+# State baru untuk search dan pagination**
+if 'search_query' not in st.session_state:
+    st.session_state.search_query = ""
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 1
 
 
 # --- HEADER UTAMA ---
-st.sidebar.title("LOGO")
-st.sidebar.write("CUSTOMER DATA PLATFORM")
-profile_button = st.sidebar.button("Profil", use_container_width=True)
+col_h_1, col_h_2 = st.columns([8,1])
+with col_h_1:
+    st.title("LOGO")
+    st.write("CUSTOMER DATA PLATFORM")
+with col_h_2:
+    st.button("Profil", icon="👤", use_container_width=True)
 
 
 # --- STRUKTUR TAB ---
-tab1, tab2, tab3 = st.tabs(["Segment Directory", "Segment Builder", "Campaign Builder"])
+tab1, tab2, tab3, tab4= st.tabs(["Segment Directory", "Segment Builder", "Campaign Builder", "Campaign Directory"])
 
 
 # ======================================================================================
@@ -177,14 +201,20 @@ tab1, tab2, tab3 = st.tabs(["Segment Directory", "Segment Builder", "Campaign Bu
 # ======================================================================================
 with tab1:
     col1, col2 = st.columns([3, 1])
+    
     with col1:
-        st.text_input("Search", placeholder="Search Segments", label_visibility="collapsed")
+        # Search input sekarang terikat ke session_state**
+        st.text_input(
+            "Search", 
+            placeholder="Search Segments by name...", 
+            label_visibility="collapsed",
+            key="search_query" # Mengikat input ini ke state
+        )
     with col2:
         if st.button("＋ Create New Segment", type="primary", use_container_width=True):
-            # Reset state dan pindah ke tab builder
             st.session_state.editing_segment_name = None
             st.session_state.active_tree_config = None
-            st.session_state.filter_version += 1 # Ganti key agar tree kosong
+            st.session_state.filter_version += 1
             st.session_state.active_tab = "Segment Builder"
             st.rerun()
 
@@ -193,28 +223,43 @@ with tab1:
     
     # Header tabel
     col_h1, col_h2, col_h3, col_h4 = st.columns([0.5, 4, 2, 1])
-    col_h1.write("**#**")
-    col_h2.write("**Segment Name**")
-    col_h3.write("**Last Modified**")
-    col_h4.write("**Actions**")
+    with col_h1: st.write("**#**")
+    with col_h2: st.write("**Segment Name**")
+    with col_h3: st.write("**Last Modified**")
+    with col_h4: st.write("**Actions**")
 
-    # Konten tabel
-    all_filters = load_all_filters()
+    # Ambil data berdasarkan search query
+    all_filters = load_all_filters(st.session_state.search_query)
+
+    # **PERUBAHAN KUNCI: Logika Pagination**
+    ITEMS_PER_PAGE = 10
+    total_items = len(all_filters)
+    total_pages = math.ceil(total_items / ITEMS_PER_PAGE)
+
+    # Pastikan halaman saat ini valid
+    if st.session_state.current_page > total_pages and total_pages > 0:
+        st.session_state.current_page = total_pages
+    elif total_pages == 0:
+        st.session_state.current_page = 1
+
+    start_index = (st.session_state.current_page - 1) * ITEMS_PER_PAGE
+    end_index = start_index + ITEMS_PER_PAGE
+    filters_to_display = all_filters[start_index:end_index]
+
     if not all_filters:
-        st.info("No segments saved yet. Click 'Create New Segment' to start.")
+        st.info("No segments found. Try clearing the search or create a new segment.")
     else:
-        for i, f in enumerate(all_filters):
+        for i, f in enumerate(filters_to_display):
             col_d1, col_d2, col_d3, col_d4 = st.columns([0.5, 4, 2, 1])
-            col_d1.write(f"**{i+1}**")
+            col_d1.write(f"**{start_index + i + 1}**")
             col_d2.write(f.nama_filter)
             col_d3.write(f.dibuat_pada.strftime("%d-%m-%Y"))
             
-            # Kolom untuk tombol action
             action_cols = col_d4.columns([1, 1])
             if action_cols[0].button("✏️", key=f"edit_{f.nama_filter}", help="Edit Segment"):
                 st.session_state.editing_segment_name = f.nama_filter
                 st.session_state.active_tree_config = get_filter_config_by_name(f.nama_filter)
-                st.session_state.filter_version += 1 # Ganti key untuk memuat tree baru
+                st.session_state.filter_version += 1
                 st.session_state.active_tab = "Segment Builder"
                 st.rerun()
 
@@ -222,6 +267,26 @@ with tab1:
                 delete_filter_by_name(f.nama_filter)
                 st.rerun()
     st.markdown("---")
+    
+    # UI untuk Info Entri dan Navigasi Halaman**
+    footer_cols = st.columns([3, 1])
+    with footer_cols[0]:
+        if total_items > 0:
+            st.write(f"Menampilkan {min(start_index + 1, total_items)} - {min(end_index, total_items)} dari {total_items} entri")
+        else:
+            st.write("Tidak ada entri")
+    
+    with footer_cols[1]:
+        nav_cols = st.columns(3)
+        if nav_cols[0].button("◀", use_container_width=True, disabled=(st.session_state.current_page <= 1)):
+            st.session_state.current_page -= 1
+            st.rerun()
+        
+        nav_cols[1].write(f"<div style='text-align:center;'>{st.session_state.current_page}</div>", unsafe_allow_html=True)
+
+        if nav_cols[2].button("▶", use_container_width=True, disabled=(st.session_state.current_page >= total_pages)):
+            st.session_state.current_page += 1
+            st.rerun()
 
 
 # ======================================================================================
@@ -292,4 +357,13 @@ with tab2:
 # ======================================================================================
 with tab3:
     st.header("Campaign Builder")
+    st.info("Fitur ini sedang dalam pengembangan.")
+
+
+
+# ======================================================================================
+# --- TAB 4: CAMPAIGN DIRECTORY ---
+# ======================================================================================
+with tab4:
+    st.header("Campaign Directory")
     st.info("Fitur ini sedang dalam pengembangan.")
