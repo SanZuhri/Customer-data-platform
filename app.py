@@ -7,6 +7,8 @@ import re
 from datetime import datetime
 import math
 import plotly.express as px
+import functools
+
 
 # Asumsikan file-file ini sudah ada
 from database import engine
@@ -111,7 +113,6 @@ def delete_filter_by_name(name: str):
     finally:
         session.close()
 
-
 # --- FUNGSI PEMUATAN DATA & PERSIAPAN ---
 @st.cache_data(ttl=600)
 def load_data_from_db():
@@ -181,6 +182,10 @@ if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 if 'current_page' not in st.session_state:
     st.session_state.current_page = 1
+if "selected_segments" not in st.session_state:
+    st.session_state.selected_segments = set()
+if "current_page" not in st.session_state:
+    st.session_state.current_page = 1
 
 
 # --- HEADER UTAMA ---
@@ -201,14 +206,12 @@ tab1, tab2, tab3, tab4= st.tabs(["Segment Directory", "Segment Builder", "Campai
 # ======================================================================================
 with tab1:
     col1, col2 = st.columns([3, 1])
-    
     with col1:
-        # Search input sekarang terikat ke session_state**
         st.text_input(
-            "Search", 
-            placeholder="Search Segments by name...", 
+            "Search",
+            placeholder="Search Segments by name...",
             label_visibility="collapsed",
-            key="search_query" # Mengikat input ini ke state
+            key="search_query"
         )
     with col2:
         if st.button("＋ Create New Segment", type="primary", use_container_width=True):
@@ -220,70 +223,161 @@ with tab1:
 
     st.header("Saved Segments")
     st.markdown("---")
-    
-    # Header tabel
-    col_h1, col_h2, col_h3, col_h4 = st.columns([0.5, 4, 2, 1])
-    with col_h1: st.write("**#**")
-    with col_h2: st.write("**Segment Name**")
-    with col_h3: st.write("**Last Modified**")
-    with col_h4: st.write("**Actions**")
 
-    # Ambil data berdasarkan search query
+    # Load data
     all_filters = load_all_filters(st.session_state.search_query)
 
-    # **PERUBAHAN KUNCI: Logika Pagination**
+    # Pagination setup
     ITEMS_PER_PAGE = 10
     total_items = len(all_filters)
     total_pages = math.ceil(total_items / ITEMS_PER_PAGE)
-
-    # Pastikan halaman saat ini valid
     if st.session_state.current_page > total_pages and total_pages > 0:
         st.session_state.current_page = total_pages
     elif total_pages == 0:
         st.session_state.current_page = 1
-
     start_index = (st.session_state.current_page - 1) * ITEMS_PER_PAGE
     end_index = start_index + ITEMS_PER_PAGE
     filters_to_display = all_filters[start_index:end_index]
+
+    # Toggle all checkboxes helper
+    def are_all_displayed_selected(displayed_filters):
+        all_names = {f.nama_filter for f in displayed_filters}
+        return all_names.issubset(st.session_state.selected_segments)
+
+    def on_select_all_change(displayed_filters):
+        all_names = {f.nama_filter for f in displayed_filters}
+        s = st.session_state.selected_segments.copy()
+        if st.session_state.select_all_segments:
+            s.update(all_names)
+        else:
+            s.difference_update(all_names)
+        st.session_state.selected_segments = s
+
+    def on_single_checkbox_change(segment_name, checked):
+        s = st.session_state.selected_segments.copy()
+        if checked:
+            s.add(segment_name)
+        else:
+            s.discard(segment_name)
+        st.session_state.selected_segments = s
+
+    # Header table
+    col_h1, col_h2, col_h3, col_h4, col_h5 = st.columns([0.5, 0.5, 4, 2, 1])
+    with col_h1:
+        st.write("**#**")
+    with col_h2:
+        select_all_value = are_all_displayed_selected(filters_to_display)
+        st.checkbox(
+            "",
+            value=select_all_value,
+            key="select_all_segments",
+            on_change=lambda: on_select_all_change(filters_to_display)
+        )
+    with col_h3:
+        st.write("**Segment Name**")
+    with col_h4:
+        st.write("**Last Modified**")
+    with col_h5:
+        st.write("**Actions**")
+
+    # Dialog konfirmasi hapus satuan
+    @st.dialog("Confirm Deletion")
+    def confirm_delete_dialog(segment_name):
+        st.warning(f"Are you sure you want to delete the segment '{segment_name}'? This action cannot be undone.")
+        col_cancel, col_confirm = st.columns([1, 1])
+        with col_cancel:
+            if st.button("Cancel", use_container_width=True):
+                st.session_state.show_confirm_dialog = False
+                st.session_state.segment_to_delete = None
+                st.rerun()
+        with col_confirm:
+            if st.button("Delete", type="primary", use_container_width=True):
+                if delete_filter_by_name(segment_name):
+                    st.session_state.show_confirm_dialog = False
+                    st.session_state.segment_to_delete = None
+                    st.rerun()
+
+    # Dialog konfirmasi hapus banyak
+    @st.dialog("Confirm Bulk Deletion")
+    def confirm_bulk_delete_dialog():
+        st.warning(f"Are you sure you want to delete these {len(st.session_state.selected_segments)} segments? This action is irreversible.")
+        st.write(", ".join(st.session_state.selected_segments))
+        col_cancel, col_confirm = st.columns([1, 1])
+        with col_cancel:
+            if st.button("Cancel", use_container_width=True):
+                st.session_state.show_bulk_delete_dialog = False
+                st.rerun()
+        with col_confirm:
+            if st.button("Delete", type="primary", use_container_width=True):
+                for name in list(st.session_state.selected_segments):
+                    delete_filter_by_name(name)
+                st.session_state.selected_segments.clear()
+                st.session_state.show_bulk_delete_dialog = False
+                st.rerun()
+
+    # Inisialisasi state
+    if "show_confirm_dialog" not in st.session_state:
+        st.session_state.show_confirm_dialog = False
+    if "segment_to_delete" not in st.session_state:
+        st.session_state.segment_to_delete = None
+    if "show_bulk_delete_dialog" not in st.session_state:
+        st.session_state.show_bulk_delete_dialog = False
 
     if not all_filters:
         st.info("No segments found. Try clearing the search or create a new segment.")
     else:
         for i, f in enumerate(filters_to_display):
-            col_d1, col_d2, col_d3, col_d4 = st.columns([0.5, 4, 2, 1])
+            col_d1, col_d2, col_d3, col_d4, col_d5 = st.columns([0.5, 0.5, 4, 2, 1])
             col_d1.write(f"**{start_index + i + 1}**")
-            col_d2.write(f.nama_filter)
-            col_d3.write(f.dibuat_pada.strftime("%d-%m-%Y"))
-            
-            action_cols = col_d4.columns([1, 1])
+
+            checked = f.nama_filter in st.session_state.selected_segments
+            col_d2.checkbox(
+                "",
+                value=checked,
+                key=f"chk_{f.nama_filter}",
+                on_change=functools.partial(on_single_checkbox_change, f.nama_filter, not checked)
+            )
+
+            col_d3.write(f.nama_filter)
+            col_d4.write(f.dibuat_pada.strftime("%d-%m-%Y"))
+
+            action_cols = col_d5.columns([1, 1])
             if action_cols[0].button("✏️", key=f"edit_{f.nama_filter}", help="Edit Segment"):
                 st.session_state.editing_segment_name = f.nama_filter
                 st.session_state.active_tree_config = get_filter_config_by_name(f.nama_filter)
                 st.session_state.filter_version += 1
                 st.session_state.active_tab = "Segment Builder"
                 st.rerun()
-
             if action_cols[1].button("🗑️", key=f"del_{f.nama_filter}", help="Delete Segment"):
-                delete_filter_by_name(f.nama_filter)
-                st.rerun()
+                st.session_state.show_confirm_dialog = True
+                st.session_state.segment_to_delete = f.nama_filter
+                confirm_delete_dialog(f.nama_filter)
+
+    # Tombol bulk delete
+    if st.session_state.selected_segments:
+        if st.button(f"🗑️ Delete Selected ({len(st.session_state.selected_segments)})", type="primary"):
+            st.session_state.show_bulk_delete_dialog = True
+
+    # Panggil dialog jika diperlukan
+    if st.session_state.get("show_bulk_delete_dialog", False):
+        confirm_bulk_delete_dialog()
+
     st.markdown("---")
-    
-    # UI untuk Info Entri dan Navigasi Halaman**
+
+    # Footer & Navigasi Halaman
     footer_cols = st.columns([3, 1])
     with footer_cols[0]:
         if total_items > 0:
             st.write(f"Menampilkan {min(start_index + 1, total_items)} - {min(end_index, total_items)} dari {total_items} entri")
         else:
             st.write("Tidak ada entri")
-    
+
     with footer_cols[1]:
         nav_cols = st.columns(3)
         if nav_cols[0].button("◀", use_container_width=True, disabled=(st.session_state.current_page <= 1)):
             st.session_state.current_page -= 1
             st.rerun()
-        
         nav_cols[1].write(f"<div style='text-align:center;'>{st.session_state.current_page}</div>", unsafe_allow_html=True)
-
         if nav_cols[2].button("▶", use_container_width=True, disabled=(st.session_state.current_page >= total_pages)):
             st.session_state.current_page += 1
             st.rerun()
