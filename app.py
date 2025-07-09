@@ -6,7 +6,7 @@ from streamlit_condition_tree import condition_tree, config_from_dataframe, JsCo
 import re
 from datetime import datetime
 import math
-
+import plotly.express as px
 
 # Asumsikan file-file ini sudah ada
 from database import engine
@@ -349,8 +349,50 @@ with tab2:
         # Placeholder untuk chart
         with builder_cols[1]:
             st.subheader("ESTIMATED TOTAL SALES")
-            # ... logika untuk chart bisa ditambahkan di sini ...
-            st.image("https://i.imgur.com/4s2Z5z4.png") # Menggunakan gambar placeholder
+            
+            try:
+                # Filter data berdasarkan query yang dibuat
+                if query_string:
+                    fixed_query = fix_query_for_pandas(query_string)
+                    filtered_df = df.query(fixed_query)
+                else:
+                    filtered_df = df.copy()
+                
+                # Hitung jumlah produk terjual per kategori
+                product_sales = filtered_df.groupby('nama_produk')['jumlah_item'].sum().reset_index()
+                total_sales = product_sales['jumlah_item'].sum()
+
+                
+                if not product_sales.empty:
+                    fig = px.pie(
+                        product_sales,
+                        values='jumlah_item',
+                        names='nama_produk',
+                        hole=0.4,
+                        title=f"Total Sales: {total_sales} items"
+                    )
+                    fig.update_traces(
+                        textposition='inside',
+                        textinfo='percent+label',
+                        hovertemplate="<b>%{label}</b><br>Quantity: %{value} (%{percent})"
+                    )
+                    fig.update_layout(
+                        margin=dict(l=20, r=20, t=40, b=20),
+                        showlegend=False
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("No data matches your current segment criteria.")
+                    
+                # Tampilkan metrik ringkasan
+                col1, col2 = st.columns(2)
+                col1.metric("Total Products", len(product_sales))
+                col2.metric("Total Quantity", total_sales)
+                
+            except Exception as e:
+                st.error(f"Error generating sales estimation: {str(e)}")
+                st.warning("Please check your segment criteria.")
+            # st.image("https://i.imgur.com/4s2Z5z4.png") # Menggunakan gambar placeholder
 
 # ======================================================================================
 # --- TAB 3: CAMPAIGN BUILDER ---
@@ -358,8 +400,6 @@ with tab2:
 with tab3:
     st.header("Campaign Builder")
     st.info("Fitur ini sedang dalam pengembangan.")
-
-
 
 # ======================================================================================
 # --- TAB 4: CAMPAIGN DIRECTORY ---
